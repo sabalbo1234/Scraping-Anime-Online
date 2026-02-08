@@ -39,7 +39,7 @@ const catalogRefreshState = {
 
 const manifest = {
     id: 'community.animeonline.castellano.v2',
-    version: '1.0.4',
+    version: '1.0.5',
     name: 'AnimeOnline Castellano (Scraper)',
     description:
         'Unofficial addon that scrapes catalog, metadata, seasons/episodes and links from animeonline.ninja',
@@ -71,6 +71,38 @@ const EMERGENCY_CATALOG_METAS = {
             poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/07/134703l.jpg',
             background: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/07/134703l.jpg',
             description: 'Fallback catalog item when cloud scraping is blocked.'
+        },
+        {
+            id: `${ID_PREFIX}:sousou-no-frieren-070925`,
+            type: 'series',
+            name: 'Sousou no Frieren',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2023/09/qGvhuha8zOCQ2xekjR3u0vSIHKx.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2023/09/qGvhuha8zOCQ2xekjR3u0vSIHKx.jpg',
+            description: 'Fallback catalog item when cloud scraping is blocked.'
+        },
+        {
+            id: `${ID_PREFIX}:oshi-no-ko-100524`,
+            type: 'series',
+            name: 'Oshi no Ko',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/06/N8Ht5dqVHakyNKVzr1O0PD698R.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/06/N8Ht5dqVHakyNKVzr1O0PD698R.jpg',
+            description: 'Fallback catalog item when cloud scraping is blocked.'
+        },
+        {
+            id: `${ID_PREFIX}:enen-no-shouboutai-082325`,
+            type: 'series',
+            name: 'Enen no Shouboutai (Fire Force)',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2020/07/rcoMpE0cz5sOrNS6yXNBcX1ErFi-185x278.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2020/07/rcoMpE0cz5sOrNS6yXNBcX1ErFi-185x278.jpg',
+            description: 'Fallback catalog item when cloud scraping is blocked.'
+        },
+        {
+            id: `${ID_PREFIX}:dragon-ball-daima-070825`,
+            type: 'series',
+            name: 'Dragon Ball Daima',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2024/10/brd9Bp1MlH8oK2nzR6VV9imY46k.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2024/10/brd9Bp1MlH8oK2nzR6VV9imY46k.jpg',
+            description: 'Fallback catalog item when cloud scraping is blocked.'
         }
     ],
     movie: [
@@ -80,6 +112,30 @@ const EMERGENCY_CATALOG_METAS = {
             name: 'Jujutsu Kaisen 0 (Fallback)',
             poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/03/rcEDPOOOUTLFxLLQJggfLffbofe.jpg',
             background: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/03/rcEDPOOOUTLFxLLQJggfLffbofe.jpg',
+            description: 'Fallback movie item when cloud scraping is blocked.'
+        },
+        {
+            id: `${ID_PREFIX}:overlord-movie-3-sei-oukoku-hen`,
+            type: 'movie',
+            name: 'Overlord Movie 3: Sei Oukoku-hen',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2024/11/fggkIB6oeVi5Mpwl0fALLVevAFN.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2024/11/fggkIB6oeVi5Mpwl0fALLVevAFN.jpg',
+            description: 'Fallback movie item when cloud scraping is blocked.'
+        },
+        {
+            id: `${ID_PREFIX}:unicorn-wars`,
+            type: 'movie',
+            name: 'Unicorn Wars',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2025/11/joOEYpfltqoqkaiQio24TUTntGM.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2025/11/joOEYpfltqoqkaiQio24TUTntGM.jpg',
+            description: 'Fallback movie item when cloud scraping is blocked.'
+        },
+        {
+            id: `${ID_PREFIX}:first-squad-the-moment-of-truth`,
+            type: 'movie',
+            name: 'First Squad: The Moment of Truth',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2025/12/m4zltJFwn5Xye7KjQOzNytVW6S0.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2025/12/m4zltJFwn5Xye7KjQOzNytVW6S0.jpg',
             description: 'Fallback movie item when cloud scraping is blocked.'
         }
     ]
