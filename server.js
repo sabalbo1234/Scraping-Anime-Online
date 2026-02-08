@@ -12,6 +12,7 @@ const ID_PREFIX = 'animeonline'
 const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
 const ONLY_CASTELLANO = true
+const FORCE_EMERGENCY_CATALOG = process.env.FORCE_EMERGENCY_CATALOG === '1'
 
 const http = axios.create({
     timeout: 20000,
@@ -36,8 +37,8 @@ const catalogRefreshState = {
 }
 
 const manifest = {
-    id: 'community.animeonline.castellano',
-    version: '1.0.0',
+    id: 'community.animeonline.castellano.v2',
+    version: '1.0.2',
     name: 'AnimeOnline Castellano (Scraper)',
     description:
         'Unofficial addon that scrapes catalog, metadata, seasons/episodes and links from animeonline.ninja',
@@ -71,7 +72,16 @@ const EMERGENCY_CATALOG_METAS = {
             description: 'Fallback catalog item when cloud scraping is blocked.'
         }
     ],
-    movie: []
+    movie: [
+        {
+            id: `${ID_PREFIX}:jujutsu-kaisen-0-pelicula`,
+            type: 'movie',
+            name: 'Jujutsu Kaisen 0 (Fallback)',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/03/rcEDPOOOUTLFxLLQJggfLffbofe.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/03/rcEDPOOOUTLFxLLQJggfLffbofe.jpg',
+            description: 'Fallback movie item when cloud scraping is blocked.'
+        }
+    ]
 }
 
 const builder = new addonBuilder(manifest)
@@ -811,6 +821,12 @@ async function scrapeStreamsFromUrl(targetUrl) {
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
     if (id !== CATALOG_ID) return { metas: [] }
+
+    if (FORCE_EMERGENCY_CATALOG) {
+        const skip = parseIntSafe(extra && extra.skip, 0)
+        const metas = (EMERGENCY_CATALOG_METAS[type] || []).slice(skip, skip + CATALOG_BATCH_SIZE)
+        return { metas, cacheMaxAge: CATALOG_CACHE_TTL_MS / 1000 }
+    }
 
     try {
         const skip = parseIntSafe(extra && extra.skip, 0)
