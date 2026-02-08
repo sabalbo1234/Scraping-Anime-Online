@@ -13,7 +13,7 @@ const ID_PREFIX = 'animeonline'
 const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
 const ONLY_CASTELLANO = true
-const FORCE_EMERGENCY_CATALOG = process.env.FORCE_EMERGENCY_CATALOG === '1'
+const FORCE_EMERGENCY_CATALOG = process.env.FORCE_EMERGENCY_CATALOG !== '0'
 
 const http = axios.create({
     timeout: 20000,
@@ -39,7 +39,7 @@ const catalogRefreshState = {
 
 const manifest = {
     id: 'community.animeonline.castellano.v2',
-    version: '1.0.5',
+    version: '1.0.6',
     name: 'AnimeOnline Castellano (Scraper)',
     description:
         'Unofficial addon that scrapes catalog, metadata, seasons/episodes and links from animeonline.ninja',
