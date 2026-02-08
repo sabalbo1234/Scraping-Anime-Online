@@ -60,6 +60,20 @@ const manifest = {
     idPrefixes: [ID_PREFIX + ':']
 }
 
+const EMERGENCY_CATALOG_METAS = {
+    series: [
+        {
+            id: `${ID_PREFIX}:jujutsu-kaisen-010125`,
+            type: 'series',
+            name: 'Jujutsu Kaisen',
+            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/07/134703l.jpg',
+            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/07/134703l.jpg',
+            description: 'Fallback catalog item when cloud scraping is blocked.'
+        }
+    ],
+    movie: []
+}
+
 const builder = new addonBuilder(manifest)
 
 function absolute(url) {
@@ -801,11 +815,17 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     try {
         const skip = parseIntSafe(extra && extra.skip, 0)
         const fullCatalog = await getFullCatalog(type)
-        const metas = fullCatalog.slice(skip, skip + CATALOG_BATCH_SIZE)
+        let metas = fullCatalog.slice(skip, skip + CATALOG_BATCH_SIZE)
+
+        if ((!metas || metas.length === 0) && skip === 0) {
+            metas = EMERGENCY_CATALOG_METAS[type] || []
+        }
+
         return { metas, cacheMaxAge: CATALOG_CACHE_TTL_MS / 1000 }
     } catch (err) {
         console.error('catalog error', err?.message || err)
-        return { metas: [] }
+        const fallback = (EMERGENCY_CATALOG_METAS[type] || []).slice(0, CATALOG_BATCH_SIZE)
+        return { metas: fallback }
     }
 })
 
