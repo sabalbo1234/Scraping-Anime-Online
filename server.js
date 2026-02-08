@@ -39,7 +39,7 @@ const catalogRefreshState = {
 
 const manifest = {
     id: 'community.animeonline.castellano.v2',
-    version: '1.0.3',
+    version: '1.0.4',
     name: 'AnimeOnline Castellano (Scraper)',
     description:
         'Unofficial addon that scrapes catalog, metadata, seasons/episodes and links from animeonline.ninja',
@@ -826,7 +826,9 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     if (FORCE_EMERGENCY_CATALOG) {
         const skip = parseIntSafe(extra && extra.skip, 0)
         const forceType = type === 'movie' ? 'movie' : 'series'
-        const metas = (EMERGENCY_CATALOG_METAS[forceType] || []).slice(skip, skip + CATALOG_BATCH_SIZE)
+        const bundled = getBundledCatalogFallback(forceType)
+        const source = bundled.length > 0 ? bundled : EMERGENCY_CATALOG_METAS[forceType] || []
+        const metas = source.slice(skip, skip + CATALOG_BATCH_SIZE)
         return { metas, cacheMaxAge: CATALOG_CACHE_TTL_MS / 1000 }
     }
 
