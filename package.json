@@ -1,0 +1,15 @@
+{
+  "name": "stremio-animeonline-addon",
+  "version": "1.0.0",
+  "description": "Stremio addon that scrapes anime catalog, metadata, and streams from animeonline.ninja",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.8.2",
+    "cheerio": "^1.0.0",
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}
