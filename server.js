@@ -7,7 +7,8 @@ const path = require('path')
 const BASE_URL = process.env.ANIME_BASE_URL || 'https://ww3.animeonline.ninja'
 const MIRROR_BASE_URLS = [...new Set([BASE_URL, 'https://www1.animeonline.ninja', 'https://animeonline.ninja'])]
 const CATALOG_PATH = '/genero/anime-castellano/'
-const CATALOG_ID = 'anime_castellano'
+const CATALOG_ID_SERIES = 'anime_castellano_series'
+const CATALOG_ID_MOVIE = 'anime_castellano_movies'
 const ID_PREFIX = 'animeonline'
 const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
@@ -38,7 +39,7 @@ const catalogRefreshState = {
 
 const manifest = {
     id: 'community.animeonline.castellano.v2',
-    version: '1.0.2',
+    version: '1.0.3',
     name: 'AnimeOnline Castellano (Scraper)',
     description:
         'Unofficial addon that scrapes catalog, metadata, seasons/episodes and links from animeonline.ninja',
@@ -47,13 +48,13 @@ const manifest = {
     catalogs: [
         {
             type: 'series',
-            id: CATALOG_ID,
+            id: CATALOG_ID_SERIES,
             name: 'Anime Castellano',
             extra: [{ name: 'skip', isRequired: false }]
         },
         {
             type: 'movie',
-            id: CATALOG_ID,
+            id: CATALOG_ID_MOVIE,
             name: 'Anime Castellano (Movies)',
             extra: [{ name: 'skip', isRequired: false }]
         }
@@ -820,6 +821,8 @@ async function scrapeStreamsFromUrl(targetUrl) {
 }
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
+    const expectedId = type === 'movie' ? CATALOG_ID_MOVIE : CATALOG_ID_SERIES
+
     if (FORCE_EMERGENCY_CATALOG) {
         const skip = parseIntSafe(extra && extra.skip, 0)
         const forceType = type === 'movie' ? 'movie' : 'series'
@@ -827,7 +830,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
         return { metas, cacheMaxAge: CATALOG_CACHE_TTL_MS / 1000 }
     }
 
-    if (id !== CATALOG_ID) return { metas: [] }
+    if (id !== expectedId) return { metas: [] }
 
     try {
         const skip = parseIntSafe(extra && extra.skip, 0)
