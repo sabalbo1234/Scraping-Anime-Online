@@ -2,7 +2,8 @@ const { addonBuilder, serveHTTP } = require('stremio-addon-sdk')
 const axios = require('axios')
 const cheerio = require('cheerio')
 
-const BASE_URL = 'https://ww3.animeonline.ninja'
+const BASE_URL = process.env.ANIME_BASE_URL || 'https://ww3.animeonline.ninja'
+const MIRROR_BASE_URLS = [...new Set([BASE_URL, 'https://www1.animeonline.ninja', 'https://animeonline.ninja'])]
 const CATALOG_PATH = '/genero/anime-castellano/'
 const CATALOG_ID = 'anime_castellano'
 const ID_PREFIX = 'animeonline'
@@ -26,6 +27,10 @@ const videoUrlCache = new Map()
 const catalogCache = {
     series: { at: 0, metas: [] },
     movie: { at: 0, metas: [] }
+}
+const catalogRefreshState = {
+    series: false,
+    movie: false
 }
 
 const manifest = {
@@ -100,8 +105,37 @@ function parseEpisodeInfo(url, text, index) {
 }
 
 async function fetchHtml(url) {
-    const { data } = await http.get(url)
-    return String(data)
+    const tried = []
+
+    for (const base of MIRROR_BASE_URLS) {
+        let target = url
+        try {
+            const original = new URL(url)
+            const mirror = new URL(base)
+            original.protocol = mirror.protocol
+            original.host = mirror.host
+            target = original.toString()
+        } catch {
+            // keep target as is
+        }
+
+        try {
+            const { data } = await http.get(target)
+            const html = String(data)
+
+            const blocked = /just a moment|cf-browser-verification|challenge-platform|cloudflare/i.test(html)
+            if (blocked) {
+                tried.push(`${target} (blocked)`)
+                continue
+            }
+
+            return html
+        } catch (err) {
+            tried.push(`${target} (${err?.response?.status || err?.message || 'error'})`)
+        }
+    }
+
+    throw new Error(`fetchHtml failed for ${url}; tried: ${tried.join(' | ')}`)
 }
 
 async function scrapeCatalog(page = 1, wantedType = 'series') {
@@ -192,9 +226,34 @@ async function getFullCatalog(wantedType = 'series') {
         return cache.metas
     }
 
-    const metas = await scrapeCatalogWithPagination(wantedType)
-    catalogCache[wantedType] = { at: now, metas }
-    return metas
+    const hasAnyCache = cache && cache.metas.length > 0
+
+    if (!catalogRefreshState[wantedType]) {
+        catalogRefreshState[wantedType] = true
+            ; (async () => {
+                try {
+                    const metas = await scrapeCatalogWithPagination(wantedType)
+                    catalogCache[wantedType] = { at: Date.now(), metas }
+                } catch (err) {
+                    console.error(`catalog background refresh error (${wantedType})`, err?.message || err)
+                } finally {
+                    catalogRefreshState[wantedType] = false
+                }
+            })()
+    }
+
+    if (hasAnyCache) {
+        return cache.metas
+    }
+
+    try {
+        const firstPage = await scrapeCatalog(1, wantedType)
+        catalogCache[wantedType] = { at: Date.now(), metas: firstPage }
+        return firstPage
+    } catch (err) {
+        console.error(`catalog warmup error (${wantedType})`, err?.message || err)
+        return []
+    }
 }
 
 function extractLinksFromTable($) {

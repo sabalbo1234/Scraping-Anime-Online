@@ -62,7 +62,9 @@ Install that URL in Stremio via “Install via URL”.
 
 - This is an **unofficial scraper**; the target site can change HTML structure at any time and break parsing.
 - Some pages may include anti-bot, Cloudflare, or dynamic rendering behavior that can affect extraction.
-- Not all providers expose direct playable URLs; some results may still fallback to `externalUrl`.
+- For cloud deployments, you can override source base URL with env var `ANIME_BASE_URL` (example: `https://www1.animeonline.ninja`).
+- The addon also tries mirror domains automatically if the primary one is blocked.
+- Not all providers expose direct playable URLs; some results may still fail depending on provider restrictions.
 - Episode season/number parsing is heuristic and may not be perfect for all titles.
 
 ## Legal / compliance
