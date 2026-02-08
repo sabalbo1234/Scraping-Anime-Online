@@ -64,7 +64,8 @@ Install that URL in Stremio via “Install via URL”.
 - Some pages may include anti-bot, Cloudflare, or dynamic rendering behavior that can affect extraction.
 - For cloud deployments, you can override source base URL with env var `ANIME_BASE_URL` (example: `https://www1.animeonline.ninja`).
 - The addon also tries mirror domains automatically if the primary one is blocked.
-- If your host is blocked by anti-bot, force a non-empty catalog with env var `FORCE_EMERGENCY_CATALOG=1`.
+- If your host is blocked by anti-bot, emergency catalog is enabled by default (`FORCE_EMERGENCY_CATALOG` disabled only with `FORCE_EMERGENCY_CATALOG=0`).
+- Automatic snapshot system: successful HTML fetches are cached in `snapshots/` and reused when source pages are later blocked.
 - Not all providers expose direct playable URLs; some results may still fail depending on provider restrictions.
 - Episode season/number parsing is heuristic and may not be perfect for all titles.
 

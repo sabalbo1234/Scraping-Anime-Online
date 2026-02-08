@@ -14,6 +14,7 @@ const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
 const ONLY_CASTELLANO = true
 const FORCE_EMERGENCY_CATALOG = process.env.FORCE_EMERGENCY_CATALOG !== '0'
+const SNAPSHOT_DIR = path.join(__dirname, 'snapshots')
 
 const http = axios.create({
     timeout: 20000,
@@ -39,7 +40,7 @@ const catalogRefreshState = {
 
 const manifest = {
     id: 'community.animeonline.castellano.v3',
-    version: '1.0.8',
+    version: '1.0.9',
     name: 'AnimeOnline Castellano (Scraper)',
     description:
         'Unofficial addon that scrapes catalog, metadata, seasons/episodes and links from animeonline.ninja',
@@ -143,6 +144,64 @@ const EMERGENCY_CATALOG_METAS = {
 
 const builder = new addonBuilder(manifest)
 
+function ensureSnapshotDir() {
+    try {
+        if (!fs.existsSync(SNAPSHOT_DIR)) fs.mkdirSync(SNAPSHOT_DIR, { recursive: true })
+    } catch {
+        // ignore fs errors on readonly envs
+    }
+}
+
+function snapshotKeyFromUrl(url) {
+    try {
+        const u = new URL(url)
+        const p = u.pathname.toLowerCase()
+
+        if (/\/genero\/anime-castellano\/?$/.test(p)) return 'catalog_page_1.html'
+        const pageM = p.match(/\/genero\/anime-castellano\/page\/(\d+)\/?$/)
+        if (pageM) return `catalog_page_${pageM[1]}.html`
+
+        const onlineM = p.match(/\/online\/([^/]+)\/?$/)
+        if (onlineM) return `show_${onlineM[1]}.html`
+
+        const peliM = p.match(/\/pelicula\/([^/]+)\/?$/)
+        if (peliM) return `movie_${peliM[1]}.html`
+
+        const epM = p.match(/\/episodio\/([^/]+)\/?$/)
+        if (epM) return `episode_${epM[1]}.html`
+
+        const safe = Buffer.from(url).toString('base64').replace(/[+/=]/g, '_')
+        return `raw_${safe}.html`
+    } catch {
+        return null
+    }
+}
+
+function saveSnapshotForUrl(url, html) {
+    try {
+        if (!html || String(html).length < 512) return
+        ensureSnapshotDir()
+        const key = snapshotKeyFromUrl(url)
+        if (!key) return
+        const fp = path.join(SNAPSHOT_DIR, key)
+        fs.writeFileSync(fp, String(html), 'utf8')
+    } catch {
+        // ignore fs errors
+    }
+}
+
+function loadSnapshotForUrl(url) {
+    try {
+        const key = snapshotKeyFromUrl(url)
+        if (!key) return null
+        const fp = path.join(SNAPSHOT_DIR, key)
+        if (!fs.existsSync(fp)) return null
+        return fs.readFileSync(fp, 'utf8')
+    } catch {
+        return null
+    }
+}
+
 function absolute(url) {
     if (!url) return null
     if (url.startsWith('http://') || url.startsWith('https://')) return url
@@ -234,10 +293,18 @@ async function fetchHtml(url) {
                 continue
             }
 
+            saveSnapshotForUrl(url, html)
+
             return html
         } catch (err) {
             tried.push(`${target} (${err?.response?.status || err?.message || 'error'})`)
         }
+    }
+
+    const diskSnapshot = loadSnapshotForUrl(url)
+    if (diskSnapshot) {
+        console.warn(`fetchHtml using disk snapshot for ${url}`)
+        return diskSnapshot
     }
 
     const bundled = getBundledHtmlForUrl(url)
