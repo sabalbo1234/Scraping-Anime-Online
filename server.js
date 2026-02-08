@@ -820,13 +820,14 @@ async function scrapeStreamsFromUrl(targetUrl) {
 }
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
-    if (id !== CATALOG_ID) return { metas: [] }
-
     if (FORCE_EMERGENCY_CATALOG) {
         const skip = parseIntSafe(extra && extra.skip, 0)
-        const metas = (EMERGENCY_CATALOG_METAS[type] || []).slice(skip, skip + CATALOG_BATCH_SIZE)
+        const forceType = type === 'movie' ? 'movie' : 'series'
+        const metas = (EMERGENCY_CATALOG_METAS[forceType] || []).slice(skip, skip + CATALOG_BATCH_SIZE)
         return { metas, cacheMaxAge: CATALOG_CACHE_TTL_MS / 1000 }
     }
+
+    if (id !== CATALOG_ID) return { metas: [] }
 
     try {
         const skip = parseIntSafe(extra && extra.skip, 0)
