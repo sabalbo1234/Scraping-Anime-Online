@@ -9,6 +9,10 @@ const ID_PREFIX = 'animeonline'
 const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
 const ONLY_CASTELLANO = true
+const STREAM_CACHE_TTL_MS = 1000 * 60 * 10
+const STREAM_RESOLVE_TIMEOUT_MS = 15000
+const PROVIDER_REQUEST_TIMEOUT_MS = 10000
+const MAX_PROVIDER_IFRAMES = 3
 
 const http = axios.create({
     timeout: 20000,
@@ -23,6 +27,7 @@ const STREAM_USER_AGENT =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
 
 const videoUrlCache = new Map()
+const streamCache = new Map()
 const catalogCache = {
     series: { at: 0, metas: [] },
     movie: { at: 0, metas: [] }
@@ -431,6 +436,15 @@ function directUrlDedupKey(url) {
     }
 }
 
+function withTimeout(promise, timeoutMs, fallbackValue) {
+    return Promise.race([
+        promise,
+        new Promise((resolve) => {
+            setTimeout(() => resolve(fallbackValue), timeoutMs)
+        })
+    ])
+}
+
 async function resolveProviderUrlToDirect(source, referer) {
     const url = source && source.providerUrl
     if (!url) return []
@@ -450,6 +464,7 @@ async function resolveProviderUrlToDirect(source, referer) {
     if (host.includes('streamtape.com') && path.includes('/e/')) {
         try {
             const { data: watchHtml } = await http.get(url, {
+                timeout: PROVIDER_REQUEST_TIMEOUT_MS,
                 headers: { Referer: referer || BASE_URL, Accept: 'text/html,application/xhtml+xml' }
             })
             return extractStreamtapeUrlsFromHtml(String(watchHtml)).filter(isLikelyDirectMediaUrl)
@@ -460,23 +475,28 @@ async function resolveProviderUrlToDirect(source, referer) {
 
     try {
         const { data: providerHtml } = await http.get(url, {
+            timeout: PROVIDER_REQUEST_TIMEOUT_MS,
             headers: { Referer: referer || BASE_URL, Accept: 'text/html,application/xhtml+xml' }
         })
 
         const found = new Set(extractDirectUrlsFromText(String(providerHtml)).filter(isLikelyDirectMediaUrl))
 
-        const nestedIframes = extractIframeSrcUrls(providerHtml)
-        for (const iframeUrl of nestedIframes) {
+        const nestedIframes = extractIframeSrcUrls(providerHtml).slice(0, MAX_PROVIDER_IFRAMES)
+        const iframeTasks = nestedIframes.map(async (iframeUrl) => {
             try {
                 const { data: frameHtml } = await http.get(iframeUrl, {
+                    timeout: PROVIDER_REQUEST_TIMEOUT_MS,
                     headers: { Referer: url, Accept: 'text/html,application/xhtml+xml' }
                 })
-                for (const u of extractDirectUrlsFromText(String(frameHtml))) {
-                    if (isLikelyDirectMediaUrl(u)) found.add(u)
-                }
+                return extractDirectUrlsFromText(String(frameHtml)).filter(isLikelyDirectMediaUrl)
             } catch {
-                // ignore per iframe
+                return []
             }
+        })
+        const iframeResults = await Promise.allSettled(iframeTasks)
+        for (const r of iframeResults) {
+            if (r.status !== 'fulfilled') continue
+            for (const u of r.value) found.add(u)
         }
 
         if (found.size > 0) return [...found]
@@ -498,12 +518,24 @@ async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
     const streams = []
     const seen = new Set()
 
+    function addStream(candidate, title, referer) {
+        const key = directUrlDedupKey(candidate)
+        if (seen.has(key)) return
+        seen.add(key)
+        streams.push({
+            title,
+            url: candidate,
+            behaviorHints: referer ? buildProxyHeadersBehaviorHints(referer) : { notWebReady: false }
+        })
+    }
+
     for (const opt of options) {
         try {
             const endpoint = `${dtAjaxConfig.url_api}${opt.post}?type=${encodeURIComponent(opt.type)}&source=${encodeURIComponent(
                 opt.source
             )}`
             const { data } = await http.get(endpoint, {
+                timeout: PROVIDER_REQUEST_TIMEOUT_MS,
                 headers: { Referer: targetUrl, Accept: 'application/json,text/plain,*/*' }
             })
 
@@ -512,18 +544,13 @@ async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
 
             const directFromEmbedUrl = extractDirectUrlsFromText(embedUrl)
             for (const u of directFromEmbedUrl) {
-                if (seen.has(u)) continue
-                seen.add(u)
-                streams.push({
-                    title: `${opt.title} (${opt.server})`,
-                    url: u,
-                    behaviorHints: { notWebReady: false }
-                })
+                addStream(u, `${opt.title} (${opt.server})`)
             }
 
-            if (streams.length > 0) continue
+            if (directFromEmbedUrl.length > 0) continue
 
             const { data: embedHtml } = await http.get(embedUrl, {
+                timeout: PROVIDER_REQUEST_TIMEOUT_MS,
                 headers: { Referer: targetUrl, Accept: 'text/html,application/xhtml+xml' }
             })
             const directFromEmbedHtml = extractDirectUrlsFromText(String(embedHtml))
@@ -532,39 +559,30 @@ async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
                 (s) => !ONLY_CASTELLANO || s.language === 'CAST'
             )
 
-            const resolvedFromProviders = []
-            for (const providerSource of providerSources) {
-                const resolved = await resolveProviderUrlToDirect(providerSource, embedUrl)
-                for (const r of resolved) {
-                    resolvedFromProviders.push({
-                        url: r,
-                        server: providerSource.server,
-                        language: providerSource.language,
-                        referer: providerSource.providerUrl
-                    })
-                }
-            }
+            const providerTasks = providerSources.map(async (providerSource) => {
+                const resolved = await withTimeout(
+                    resolveProviderUrlToDirect(providerSource, embedUrl),
+                    PROVIDER_REQUEST_TIMEOUT_MS,
+                    []
+                )
+                return resolved.map((r) => ({
+                    url: r,
+                    server: providerSource.server,
+                    language: providerSource.language,
+                    referer: providerSource.providerUrl
+                }))
+            })
+            const providerResults = await Promise.allSettled(providerTasks)
 
             for (const u of [...directFromEmbedHtml, ...directFromStreamtape]) {
-                const k = directUrlDedupKey(u)
-                if (seen.has(k)) continue
-                seen.add(k)
-                streams.push({
-                    title: `${opt.title} (${opt.server})`,
-                    url: u,
-                    behaviorHints: buildProxyHeadersBehaviorHints(embedUrl)
-                })
+                addStream(u, `${opt.title} (${opt.server})`, embedUrl)
             }
 
-            for (const item of resolvedFromProviders) {
-                const k = directUrlDedupKey(item.url)
-                if (seen.has(k)) continue
-                seen.add(k)
-                streams.push({
-                    title: `${item.server} • ${item.language}`,
-                    url: item.url,
-                    behaviorHints: buildProxyHeadersBehaviorHints(item.referer || embedUrl)
-                })
+            for (const r of providerResults) {
+                if (r.status !== 'fulfilled') continue
+                for (const item of r.value) {
+                    addStream(item.url, `${item.server} • ${item.language}`, item.referer || embedUrl)
+                }
             }
         } catch (err) {
             console.error('embed source extraction error', err?.message || err)
@@ -704,7 +722,14 @@ async function scrapeMeta(metaId, type) {
 }
 
 async function scrapeStreamsFromUrl(targetUrl) {
-    const directStreams = await fetchEmbedSourcesFromEpisodePage(targetUrl)
+    const cached = streamCache.get(targetUrl)
+    const now = Date.now()
+    if (cached && now - cached.at < STREAM_CACHE_TTL_MS) return cached.streams
+
+    const directStreams = await withTimeout(fetchEmbedSourcesFromEpisodePage(targetUrl), STREAM_RESOLVE_TIMEOUT_MS, [])
+    if (directStreams.length > 0) {
+        streamCache.set(targetUrl, { at: now, streams: directStreams })
+    }
     if (directStreams.length > 0) return directStreams
 
     return []
