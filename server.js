@@ -1,6 +1,8 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk')
 const axios = require('axios')
 const cheerio = require('cheerio')
+const fs = require('fs')
+const path = require('path')
 
 const BASE_URL = process.env.ANIME_BASE_URL || 'https://ww3.animeonline.ninja'
 const MIRROR_BASE_URLS = [...new Set([BASE_URL, 'https://www1.animeonline.ninja', 'https://animeonline.ninja'])]
@@ -141,6 +143,10 @@ async function fetchHtml(url) {
 async function scrapeCatalog(page = 1, wantedType = 'series') {
     const url = page <= 1 ? absolute(CATALOG_PATH) : absolute(`${CATALOG_PATH}page/${page}/`)
     const html = await fetchHtml(url)
+    return parseCatalogHtml(html, wantedType)
+}
+
+function parseCatalogHtml(html, wantedType = 'series') {
     const $ = cheerio.load(html)
 
     const metas = []
@@ -178,6 +184,18 @@ async function scrapeCatalog(page = 1, wantedType = 'series') {
     })
 
     return metas
+}
+
+function getBundledCatalogFallback(wantedType = 'series') {
+    try {
+        const fallbackPath = path.join(__dirname, 'sample_catalog.html')
+        if (!fs.existsSync(fallbackPath)) return []
+        const html = fs.readFileSync(fallbackPath, 'utf8')
+        return parseCatalogHtml(html, wantedType)
+    } catch (err) {
+        console.error('bundled catalog fallback error', err?.message || err)
+        return []
+    }
 }
 
 function parseTotalPages($) {
@@ -248,11 +266,19 @@ async function getFullCatalog(wantedType = 'series') {
 
     try {
         const firstPage = await scrapeCatalog(1, wantedType)
-        catalogCache[wantedType] = { at: Date.now(), metas: firstPage }
-        return firstPage
+        if (firstPage.length > 0) {
+            catalogCache[wantedType] = { at: Date.now(), metas: firstPage }
+            return firstPage
+        }
+
+        const bundledFallback = getBundledCatalogFallback(wantedType)
+        catalogCache[wantedType] = { at: Date.now(), metas: bundledFallback }
+        return bundledFallback
     } catch (err) {
         console.error(`catalog warmup error (${wantedType})`, err?.message || err)
-        return []
+        const bundledFallback = getBundledCatalogFallback(wantedType)
+        catalogCache[wantedType] = { at: Date.now(), metas: bundledFallback }
+        return bundledFallback
     }
 }
 
