@@ -766,6 +766,5 @@ builder.defineStreamHandler(async ({ type, id }) => {
 })
 
 const addonInterface = builder.getInterface()
-const PORT = Number(process.env.PORT || 7000)
-serveHTTP(addonInterface, { port: PORT })
-console.log(`AnimeOnline addon running on http://127.0.0.1:${PORT}/manifest.json`)
+serveHTTP(addonInterface, { port: 7000 })
+console.log('AnimeOnline addon running on http://127.0.0.1:7000/manifest.json')

@@ -24,7 +24,7 @@ By default it serves on:
 
 - `http://127.0.0.1:7000/manifest.json`
 
-## 3) Install in Stremio (local)
+## 3) Install in Stremio
 
 1. Open Stremio.
 2. Go to Addons.
@@ -32,33 +32,14 @@ By default it serves on:
 4. Paste:
    - `http://127.0.0.1:7000/manifest.json`
 
-## 4) Deploy to Render (public)
-
-### A. Push this project to GitHub
-
-### B. Create Web Service in Render
-- New + -> Web Service
-- Connect your GitHub repo
-- Runtime: `Node`
-- Build Command: `npm install`
-- Start Command: `npm start`
-
-This addon already supports Render dynamic port using `process.env.PORT`.
-
-### C. Get your public manifest URL
-After deploy, use:
-- `https://YOUR-RENDER-SERVICE.onrender.com/manifest.json`
-
-Install that URL in Stremio via “Install via URL”.
-
 ## Notes and limitations
 
 - The addon now attempts to fetch the **full paginated catalog** and serves it in batches through `skip`, so Stremio can browse beyond the first page.
 - For streams, the addon tries this order:
   1. Resolve DooPlay player options from episode pages
   2. Query DooPlay JSON endpoint for embed URL
-  3. Resolve provider pages (currently Streamtape) to direct playable links
-  4. Return only direct stream URLs for in-app playback (`url`), without opening websites
+  3. Extract direct media URLs (`.m3u8`, `.mp4`, `.mpd`, `.webm`) from embed URL / embed HTML
+  4. Fallback to external links if direct URL extraction is not possible
 
 - This is an **unofficial scraper**; the target site can change HTML structure at any time and break parsing.
 - Some pages may include anti-bot, Cloudflare, or dynamic rendering behavior that can affect extraction.
