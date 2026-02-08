@@ -10,8 +10,8 @@ const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
 const ONLY_CASTELLANO = true
 const STREAM_CACHE_TTL_MS = 1000 * 60 * 10
-const STREAM_RESOLVE_TIMEOUT_MS = 15000
-const PROVIDER_REQUEST_TIMEOUT_MS = 10000
+const STREAM_RESOLVE_TIMEOUT_MS = 9000
+const PROVIDER_REQUEST_TIMEOUT_MS = 6000
 const MAX_PROVIDER_IFRAMES = 3
 
 const http = axios.create({
@@ -511,9 +511,20 @@ async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
     const html = await fetchHtml(targetUrl)
     const $ = cheerio.load(html)
 
+    const fallbackStreams = []
+    const fallbackSeen = new Set()
+    for (const item of [...extractLinksFromTable($), ...extractIframeLinks($)]) {
+        const u = item.url || item.externalUrl
+        if (!u) continue
+        const k = directUrlDedupKey(u)
+        if (fallbackSeen.has(k)) continue
+        fallbackSeen.add(k)
+        fallbackStreams.push(item)
+    }
+
     const dtAjaxConfig = parseJsonVarFromHtml(html, 'dtAjax')
     const options = extractDooplayOptions($)
-    if (!dtAjaxConfig || !dtAjaxConfig.url_api || options.length === 0) return []
+    if (!dtAjaxConfig || !dtAjaxConfig.url_api || options.length === 0) return fallbackStreams
 
     const streams = []
     const seen = new Set()
@@ -589,7 +600,8 @@ async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
         }
     }
 
-    return streams
+    if (streams.length > 0) return streams
+    return fallbackStreams
 }
 
 async function scrapeMeta(metaId, type) {
@@ -727,9 +739,7 @@ async function scrapeStreamsFromUrl(targetUrl) {
     if (cached && now - cached.at < STREAM_CACHE_TTL_MS) return cached.streams
 
     const directStreams = await withTimeout(fetchEmbedSourcesFromEpisodePage(targetUrl), STREAM_RESOLVE_TIMEOUT_MS, [])
-    if (directStreams.length > 0) {
-        streamCache.set(targetUrl, { at: now, streams: directStreams })
-    }
+    streamCache.set(targetUrl, { at: now, streams: directStreams })
     if (directStreams.length > 0) return directStreams
 
     return []
