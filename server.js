@@ -1,20 +1,14 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk')
 const axios = require('axios')
 const cheerio = require('cheerio')
-const fs = require('fs')
-const path = require('path')
 
-const BASE_URL = process.env.ANIME_BASE_URL || 'https://ww3.animeonline.ninja'
-const MIRROR_BASE_URLS = [...new Set([BASE_URL, 'https://www1.animeonline.ninja', 'https://animeonline.ninja'])]
+const BASE_URL = 'https://ww3.animeonline.ninja'
 const CATALOG_PATH = '/genero/anime-castellano/'
-const CATALOG_ID_SERIES = 'anime_castellano_series_v2'
-const CATALOG_ID_MOVIE = 'anime_castellano_movies_v2'
+const CATALOG_ID = 'anime_castellano'
 const ID_PREFIX = 'animeonline'
 const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
 const ONLY_CASTELLANO = true
-const FORCE_EMERGENCY_CATALOG = process.env.FORCE_EMERGENCY_CATALOG !== '0'
-const SNAPSHOT_DIR = path.join(__dirname, 'snapshots')
 
 const http = axios.create({
     timeout: 20000,
@@ -33,14 +27,10 @@ const catalogCache = {
     series: { at: 0, metas: [] },
     movie: { at: 0, metas: [] }
 }
-const catalogRefreshState = {
-    series: false,
-    movie: false
-}
 
 const manifest = {
-    id: 'community.animeonline.castellano.v3',
-    version: '1.0.9',
+    id: 'community.animeonline.castellano',
+    version: '1.0.0',
     name: 'AnimeOnline Castellano (Scraper)',
     description:
         'Unofficial addon that scrapes catalog, metadata, seasons/episodes and links from animeonline.ninja',
@@ -49,13 +39,13 @@ const manifest = {
     catalogs: [
         {
             type: 'series',
-            id: CATALOG_ID_SERIES,
+            id: CATALOG_ID,
             name: 'Anime Castellano',
             extra: [{ name: 'skip', isRequired: false }]
         },
         {
             type: 'movie',
-            id: CATALOG_ID_MOVIE,
+            id: CATALOG_ID,
             name: 'Anime Castellano (Movies)',
             extra: [{ name: 'skip', isRequired: false }]
         }
@@ -63,144 +53,7 @@ const manifest = {
     idPrefixes: [ID_PREFIX + ':']
 }
 
-const EMERGENCY_CATALOG_METAS = {
-    series: [
-        {
-            id: `${ID_PREFIX}:jujutsu-kaisen-010125`,
-            type: 'series',
-            name: 'Jujutsu Kaisen',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/07/134703l.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/07/134703l.jpg',
-            description: 'Fallback catalog item when cloud scraping is blocked.'
-        },
-        {
-            id: `${ID_PREFIX}:sousou-no-frieren-070925`,
-            type: 'series',
-            name: 'Sousou no Frieren',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2023/09/qGvhuha8zOCQ2xekjR3u0vSIHKx.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2023/09/qGvhuha8zOCQ2xekjR3u0vSIHKx.jpg',
-            description: 'Fallback catalog item when cloud scraping is blocked.'
-        },
-        {
-            id: `${ID_PREFIX}:oshi-no-ko-100524`,
-            type: 'series',
-            name: 'Oshi no Ko',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/06/N8Ht5dqVHakyNKVzr1O0PD698R.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/06/N8Ht5dqVHakyNKVzr1O0PD698R.jpg',
-            description: 'Fallback catalog item when cloud scraping is blocked.'
-        },
-        {
-            id: `${ID_PREFIX}:enen-no-shouboutai-082325`,
-            type: 'series',
-            name: 'Enen no Shouboutai (Fire Force)',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2020/07/rcoMpE0cz5sOrNS6yXNBcX1ErFi-185x278.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2020/07/rcoMpE0cz5sOrNS6yXNBcX1ErFi-185x278.jpg',
-            description: 'Fallback catalog item when cloud scraping is blocked.'
-        },
-        {
-            id: `${ID_PREFIX}:dragon-ball-daima-070825`,
-            type: 'series',
-            name: 'Dragon Ball Daima',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2024/10/brd9Bp1MlH8oK2nzR6VV9imY46k.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2024/10/brd9Bp1MlH8oK2nzR6VV9imY46k.jpg',
-            description: 'Fallback catalog item when cloud scraping is blocked.'
-        }
-    ],
-    movie: [
-        {
-            id: `${ID_PREFIX}:jujutsu-kaisen-0-pelicula`,
-            type: 'movie',
-            name: 'Jujutsu Kaisen 0 (Fallback)',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/03/rcEDPOOOUTLFxLLQJggfLffbofe.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2022/03/rcEDPOOOUTLFxLLQJggfLffbofe.jpg',
-            description: 'Fallback movie item when cloud scraping is blocked.'
-        },
-        {
-            id: `${ID_PREFIX}:overlord-movie-3-sei-oukoku-hen`,
-            type: 'movie',
-            name: 'Overlord Movie 3: Sei Oukoku-hen',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2024/11/fggkIB6oeVi5Mpwl0fALLVevAFN.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2024/11/fggkIB6oeVi5Mpwl0fALLVevAFN.jpg',
-            description: 'Fallback movie item when cloud scraping is blocked.'
-        },
-        {
-            id: `${ID_PREFIX}:unicorn-wars`,
-            type: 'movie',
-            name: 'Unicorn Wars',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2025/11/joOEYpfltqoqkaiQio24TUTntGM.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2025/11/joOEYpfltqoqkaiQio24TUTntGM.jpg',
-            description: 'Fallback movie item when cloud scraping is blocked.'
-        },
-        {
-            id: `${ID_PREFIX}:first-squad-the-moment-of-truth`,
-            type: 'movie',
-            name: 'First Squad: The Moment of Truth',
-            poster: 'https://ww3.animeonline.ninja/wp-content/uploads/2025/12/m4zltJFwn5Xye7KjQOzNytVW6S0.jpg',
-            background: 'https://ww3.animeonline.ninja/wp-content/uploads/2025/12/m4zltJFwn5Xye7KjQOzNytVW6S0.jpg',
-            description: 'Fallback movie item when cloud scraping is blocked.'
-        }
-    ]
-}
-
 const builder = new addonBuilder(manifest)
-
-function ensureSnapshotDir() {
-    try {
-        if (!fs.existsSync(SNAPSHOT_DIR)) fs.mkdirSync(SNAPSHOT_DIR, { recursive: true })
-    } catch {
-        // ignore fs errors on readonly envs
-    }
-}
-
-function snapshotKeyFromUrl(url) {
-    try {
-        const u = new URL(url)
-        const p = u.pathname.toLowerCase()
-
-        if (/\/genero\/anime-castellano\/?$/.test(p)) return 'catalog_page_1.html'
-        const pageM = p.match(/\/genero\/anime-castellano\/page\/(\d+)\/?$/)
-        if (pageM) return `catalog_page_${pageM[1]}.html`
-
-        const onlineM = p.match(/\/online\/([^/]+)\/?$/)
-        if (onlineM) return `show_${onlineM[1]}.html`
-
-        const peliM = p.match(/\/pelicula\/([^/]+)\/?$/)
-        if (peliM) return `movie_${peliM[1]}.html`
-
-        const epM = p.match(/\/episodio\/([^/]+)\/?$/)
-        if (epM) return `episode_${epM[1]}.html`
-
-        const safe = Buffer.from(url).toString('base64').replace(/[+/=]/g, '_')
-        return `raw_${safe}.html`
-    } catch {
-        return null
-    }
-}
-
-function saveSnapshotForUrl(url, html) {
-    try {
-        if (!html || String(html).length < 512) return
-        ensureSnapshotDir()
-        const key = snapshotKeyFromUrl(url)
-        if (!key) return
-        const fp = path.join(SNAPSHOT_DIR, key)
-        fs.writeFileSync(fp, String(html), 'utf8')
-    } catch {
-        // ignore fs errors
-    }
-}
-
-function loadSnapshotForUrl(url) {
-    try {
-        const key = snapshotKeyFromUrl(url)
-        if (!key) return null
-        const fp = path.join(SNAPSHOT_DIR, key)
-        if (!fs.existsSync(fp)) return null
-        return fs.readFileSync(fp, 'utf8')
-    } catch {
-        return null
-    }
-}
 
 function absolute(url) {
     if (!url) return null
@@ -246,83 +99,14 @@ function parseEpisodeInfo(url, text, index) {
     return { season, episode }
 }
 
-function getBundledHtmlForUrl(url) {
-    try {
-        const u = new URL(url)
-        const p = u.pathname.toLowerCase()
-
-        const fallbackMap = [
-            { test: /\/online\/jujutsu-kaisen-010125\/?$/, file: 'sample_show.html' },
-            { test: /\/episodio\/jujutsu-kaisen-cap-1\/?$/, file: 'sample_episode.html' },
-            { test: /\/genero\/anime-castellano\/?$/, file: 'sample_catalog.html' }
-        ]
-
-        const match = fallbackMap.find((x) => x.test.test(p))
-        if (!match) return null
-
-        const fp = path.join(__dirname, match.file)
-        if (!fs.existsSync(fp)) return null
-        return fs.readFileSync(fp, 'utf8')
-    } catch {
-        return null
-    }
-}
-
 async function fetchHtml(url) {
-    const tried = []
-
-    for (const base of MIRROR_BASE_URLS) {
-        let target = url
-        try {
-            const original = new URL(url)
-            const mirror = new URL(base)
-            original.protocol = mirror.protocol
-            original.host = mirror.host
-            target = original.toString()
-        } catch {
-            // keep target as is
-        }
-
-        try {
-            const { data } = await http.get(target)
-            const html = String(data)
-
-            const blocked = /just a moment|cf-browser-verification|challenge-platform|cloudflare/i.test(html)
-            if (blocked) {
-                tried.push(`${target} (blocked)`)
-                continue
-            }
-
-            saveSnapshotForUrl(url, html)
-
-            return html
-        } catch (err) {
-            tried.push(`${target} (${err?.response?.status || err?.message || 'error'})`)
-        }
-    }
-
-    const diskSnapshot = loadSnapshotForUrl(url)
-    if (diskSnapshot) {
-        console.warn(`fetchHtml using disk snapshot for ${url}`)
-        return diskSnapshot
-    }
-
-    const bundled = getBundledHtmlForUrl(url)
-    if (bundled) {
-        console.warn(`fetchHtml using bundled fallback for ${url}`)
-        return bundled
-    }
-
-    throw new Error(`fetchHtml failed for ${url}; tried: ${tried.join(' | ')}`)
+    const { data } = await http.get(url)
+    return String(data)
 }
 
 async function scrapeCatalog(page = 1, wantedType = 'series') {
     const url = page <= 1 ? absolute(CATALOG_PATH) : absolute(`${CATALOG_PATH}page/${page}/`)
     const html = await fetchHtml(url)
-    return parseCatalogHtml(html, wantedType)
-}
-
-function parseCatalogHtml(html, wantedType = 'series') {
     const $ = cheerio.load(html)
 
     const metas = []
@@ -360,18 +144,6 @@ function parseCatalogHtml(html, wantedType = 'series') {
     })
 
     return metas
-}
-
-function getBundledCatalogFallback(wantedType = 'series') {
-    try {
-        const fallbackPath = path.join(__dirname, 'sample_catalog.html')
-        if (!fs.existsSync(fallbackPath)) return []
-        const html = fs.readFileSync(fallbackPath, 'utf8')
-        return parseCatalogHtml(html, wantedType)
-    } catch (err) {
-        console.error('bundled catalog fallback error', err?.message || err)
-        return []
-    }
 }
 
 function parseTotalPages($) {
@@ -420,42 +192,9 @@ async function getFullCatalog(wantedType = 'series') {
         return cache.metas
     }
 
-    const hasAnyCache = cache && cache.metas.length > 0
-
-    if (!catalogRefreshState[wantedType]) {
-        catalogRefreshState[wantedType] = true
-            ; (async () => {
-                try {
-                    const metas = await scrapeCatalogWithPagination(wantedType)
-                    catalogCache[wantedType] = { at: Date.now(), metas }
-                } catch (err) {
-                    console.error(`catalog background refresh error (${wantedType})`, err?.message || err)
-                } finally {
-                    catalogRefreshState[wantedType] = false
-                }
-            })()
-    }
-
-    if (hasAnyCache) {
-        return cache.metas
-    }
-
-    try {
-        const firstPage = await scrapeCatalog(1, wantedType)
-        if (firstPage.length > 0) {
-            catalogCache[wantedType] = { at: Date.now(), metas: firstPage }
-            return firstPage
-        }
-
-        const bundledFallback = getBundledCatalogFallback(wantedType)
-        catalogCache[wantedType] = { at: Date.now(), metas: bundledFallback }
-        return bundledFallback
-    } catch (err) {
-        console.error(`catalog warmup error (${wantedType})`, err?.message || err)
-        const bundledFallback = getBundledCatalogFallback(wantedType)
-        catalogCache[wantedType] = { at: Date.now(), metas: bundledFallback }
-        return bundledFallback
-    }
+    const metas = await scrapeCatalogWithPagination(wantedType)
+    catalogCache[wantedType] = { at: now, metas }
+    return metas
 }
 
 function extractLinksFromTable($) {
@@ -972,33 +711,16 @@ async function scrapeStreamsFromUrl(targetUrl) {
 }
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
-    const expectedId = type === 'movie' ? CATALOG_ID_MOVIE : CATALOG_ID_SERIES
-
-    if (FORCE_EMERGENCY_CATALOG) {
-        const skip = parseIntSafe(extra && extra.skip, 0)
-        const forceType = type === 'movie' ? 'movie' : 'series'
-        const bundled = getBundledCatalogFallback(forceType)
-        const source = bundled.length > 0 ? bundled : EMERGENCY_CATALOG_METAS[forceType] || []
-        const metas = source.slice(skip, skip + CATALOG_BATCH_SIZE)
-        return { metas, cacheMaxAge: CATALOG_CACHE_TTL_MS / 1000 }
-    }
-
-    if (id !== expectedId) return { metas: [] }
+    if (id !== CATALOG_ID) return { metas: [] }
 
     try {
         const skip = parseIntSafe(extra && extra.skip, 0)
         const fullCatalog = await getFullCatalog(type)
-        let metas = fullCatalog.slice(skip, skip + CATALOG_BATCH_SIZE)
-
-        if ((!metas || metas.length === 0) && skip === 0) {
-            metas = EMERGENCY_CATALOG_METAS[type] || []
-        }
-
+        const metas = fullCatalog.slice(skip, skip + CATALOG_BATCH_SIZE)
         return { metas, cacheMaxAge: CATALOG_CACHE_TTL_MS / 1000 }
     } catch (err) {
         console.error('catalog error', err?.message || err)
-        const fallback = (EMERGENCY_CATALOG_METAS[type] || []).slice(0, CATALOG_BATCH_SIZE)
-        return { metas: fallback }
+        return { metas: [] }
     }
 })
 
