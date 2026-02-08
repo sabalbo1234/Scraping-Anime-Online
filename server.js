@@ -7,8 +7,8 @@ const path = require('path')
 const BASE_URL = process.env.ANIME_BASE_URL || 'https://ww3.animeonline.ninja'
 const MIRROR_BASE_URLS = [...new Set([BASE_URL, 'https://www1.animeonline.ninja', 'https://animeonline.ninja'])]
 const CATALOG_PATH = '/genero/anime-castellano/'
-const CATALOG_ID_SERIES = 'anime_castellano_series'
-const CATALOG_ID_MOVIE = 'anime_castellano_movies'
+const CATALOG_ID_SERIES = 'anime_castellano_series_v2'
+const CATALOG_ID_MOVIE = 'anime_castellano_movies_v2'
 const ID_PREFIX = 'animeonline'
 const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
@@ -38,8 +38,8 @@ const catalogRefreshState = {
 }
 
 const manifest = {
-    id: 'community.animeonline.castellano.v2',
-    version: '1.0.6',
+    id: 'community.animeonline.castellano.v3',
+    version: '1.0.7',
     name: 'AnimeOnline Castellano (Scraper)',
     description:
         'Unofficial addon that scrapes catalog, metadata, seasons/episodes and links from animeonline.ninja',
