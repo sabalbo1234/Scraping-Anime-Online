@@ -1,6 +1,8 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk')
 const axios = require('axios')
 const cheerio = require('cheerio')
+const nodeHttp = require('http')
+const os = require('os')
 
 const BASE_URL = 'https://ww3.animeonline.ninja'
 const CATALOG_PATH = '/genero/anime-castellano/'
@@ -8,11 +10,16 @@ const CATALOG_ID = 'anime_castellano'
 const ID_PREFIX = 'animeonline'
 const CATALOG_CACHE_TTL_MS = 1000 * 60 * 30
 const CATALOG_BATCH_SIZE = 120
-const ONLY_CASTELLANO = true
-const STREAM_CACHE_TTL_MS = 1000 * 60 * 10
-const STREAM_RESOLVE_TIMEOUT_MS = 9000
+const ONLY_CASTELLANO = false
+const STREAM_CACHE_TTL_MS = 1000 * 60 * 30
+const STREAM_RESOLVE_TIMEOUT_MS = 22000
 const PROVIDER_REQUEST_TIMEOUT_MS = 6000
 const MAX_PROVIDER_IFRAMES = 3
+const PREFERRED_SERVER_KEYWORDS = ['uqload', 'mp4upload']
+const PROXY_PORT = 7002
+const STREAM_FIRST_RESPONSE_TIMEOUT_MS = 4500
+const STREAM_PREWARM_VIDEOS = 3
+const STRICT_PLAYABLE_ONLY = false
 
 const http = axios.create({
     timeout: 20000,
@@ -28,6 +35,8 @@ const STREAM_USER_AGENT =
 
 const videoUrlCache = new Map()
 const streamCache = new Map()
+const streamProbeCache = new Map()
+const streamResolveJobs = new Map()
 const catalogCache = {
     series: { at: 0, metas: [] },
     movie: { at: 0, metas: [] }
@@ -65,6 +74,46 @@ function absolute(url) {
     if (url.startsWith('http://') || url.startsWith('https://')) return url
     if (url.startsWith('/')) return `${BASE_URL}${url}`
     return `${BASE_URL}/${url}`
+}
+
+function detectLanIp() {
+    try {
+        const all = os.networkInterfaces()
+        const candidates = []
+        for (const name of Object.keys(all)) {
+            const list = all[name] || []
+            for (const n of list) {
+                if (!n || n.internal || n.family !== 'IPv4') continue
+                candidates.push(n.address)
+            }
+        }
+
+        const prioritized = candidates.find((ip) => ip.startsWith('192.168.'))
+            || candidates.find((ip) => ip.startsWith('10.'))
+            || candidates.find((ip) => /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip))
+            || candidates[0]
+
+        return prioritized || '127.0.0.1'
+    } catch {
+        return '127.0.0.1'
+    }
+}
+
+const PUBLIC_HOST = process.env.ADDON_HOST || detectLanIp()
+const PROXY_BASE_URL = `http://${PUBLIC_HOST}:${PROXY_PORT}`
+
+function buildProxyStreamUrl(targetUrl, referer) {
+    const u = new URL('/proxy', PROXY_BASE_URL)
+    u.searchParams.set('url', targetUrl)
+    if (referer) u.searchParams.set('referer', referer)
+    return u.toString()
+}
+
+function buildProviderProxyUrl(providerUrl, referer) {
+    const u = new URL('/provider', PROXY_BASE_URL)
+    u.searchParams.set('url', providerUrl)
+    if (referer) u.searchParams.set('referer', referer)
+    return u.toString()
 }
 
 function slugFromUrl(url) {
@@ -282,8 +331,9 @@ function isLikelyDirectMediaUrl(rawUrl) {
 
     const isKnownDirectExt = /\.(m3u8|mp4|mpd|webm)$/.test(path)
     const isStreamtapeDirect = host.includes('streamtape.com') && path.includes('/get_video')
+    const isMp4UploadDirect = host.includes('mp4upload.com') && path.includes('/d/')
 
-    if (!isKnownDirectExt && !isStreamtapeDirect) return false
+    if (!isKnownDirectExt && !isStreamtapeDirect && !isMp4UploadDirect) return false
 
     if (isStreamtapeDirect) {
         const id = (u.searchParams.get('id') || '').trim()
@@ -300,6 +350,39 @@ function isLikelyDirectMediaUrl(rawUrl) {
     }
 
     return true
+}
+
+function isLikelyTvPlayableUrl(url) {
+    const s = String(url || '').toLowerCase()
+    if (!s) return false
+
+    // Netu/cfglobalcdn links with /secip/ are often IP-bound/expired and fail on TV players
+    if (s.includes('/secip/')) return false
+
+    return true
+}
+
+function extractMp4UploadDirectUrlsFromHtml(text) {
+    const urls = new Set()
+    const raw = String(text || '').replace(/\\u0026/g, '&')
+
+    const patterns = [
+        /https?:\/\/[^\s"'<>]*mp4upload[^\s"'<>]*\/d\/[^\s"'<>]+/gi,
+        /https?:\/\/[^\s"'<>]+\.mp4(?:\?[^\s"'<>]*)?/gi,
+        /player\.src\(\[\{\s*src\s*:\s*"([^"]+)"/gi,
+        /(?:file|src)\s*[:=]\s*"([^"]+)"/gi
+    ]
+
+    for (const re of patterns) {
+        let m
+        while ((m = re.exec(raw)) !== null) {
+            const candidate = normalizeExtractedUrl(m[1] || m[0])
+            if (!/^https?:\/\//i.test(candidate)) continue
+            if (isLikelyDirectMediaUrl(candidate)) urls.add(candidate)
+        }
+    }
+
+    return [...urls]
 }
 
 function extractStreamtapeUrlsFromHtml(text) {
@@ -384,10 +467,27 @@ function extractDirectUrlsFromText(text) {
 
 function languageFromClasses(classes) {
     const normalized = String(classes || '').toUpperCase()
-    if (normalized.includes('OD_SUB')) return 'SUB'
+    if (normalized.includes('OD_SUB')) return 'JAP/SUB'
     if (normalized.includes('OD_LAT')) return 'LAT'
     if (normalized.includes('OD_ES')) return 'CAST'
     return 'UNK'
+}
+
+function serverNameFromUrl(url) {
+    try {
+        const host = new URL(url).hostname.toLowerCase().replace(/^www\./i, '')
+        if (host.includes('mp4upload')) return 'MP4UPLOAD'
+        if (host.includes('streamtape')) return 'STREAMTAPE'
+        if (host.includes('uqload')) return 'UQLOAD'
+        if (host.includes('mixdrop')) return 'MIXDROP'
+        if (host.includes('filemoon')) return 'FILEMOON'
+        if (host.includes('netu')) return 'NETU'
+        if (host.includes('hexupload')) return 'HEXUPLOAD'
+        if (host.includes('lulustream')) return 'LULUSTREAM'
+        return host.toUpperCase()
+    } catch {
+        return 'UNKNOWN'
+    }
 }
 
 function extractGoToPlayerSources(embedHtml) {
@@ -405,11 +505,7 @@ function extractGoToPlayerSources(embedHtml) {
 
         let server = el.find('span').first().text().trim()
         if (!server) {
-            try {
-                server = new URL(providerUrl).hostname.replace(/^www\./i, '')
-            } catch {
-                server = 'unknown'
-            }
+            server = serverNameFromUrl(providerUrl)
         }
         server = server.toUpperCase()
 
@@ -436,6 +532,41 @@ function directUrlDedupKey(url) {
     }
 }
 
+function streamPriorityScore(stream) {
+    const raw = `${stream && stream.title ? stream.title : ''} ${stream && stream.url ? stream.url : ''} ${stream && stream.externalUrl ? stream.externalUrl : ''}`.toLowerCase()
+    for (let i = 0; i < PREFERRED_SERVER_KEYWORDS.length; i += 1) {
+        if (raw.includes(PREFERRED_SERVER_KEYWORDS[i])) return i
+    }
+
+    const isExternal = Boolean(stream && stream.externalUrl)
+    if (isExternal) return 200
+    return 100
+}
+
+function normalizeLanguageTag(language) {
+    const l = String(language || '').toUpperCase()
+    if (l.includes('CAST') || l.includes('ES')) return 'CAST'
+    if (l.includes('LAT')) return 'LAT'
+    if (l.includes('JAP') || l.includes('SUB')) return 'JAP/SUB'
+    return 'UNK'
+}
+
+function extractLanguageFromTitle(title) {
+    const t = String(title || '').toUpperCase()
+    if (t.includes('CAST')) return 'CAST'
+    if (t.includes('LAT')) return 'LAT'
+    if (t.includes('JAP') || t.includes('SUB')) return 'JAP/SUB'
+    return 'UNK'
+}
+
+function languageSortScore(tag) {
+    const lang = normalizeLanguageTag(tag)
+    if (lang === 'CAST') return 0
+    if (lang === 'LAT') return 1
+    if (lang === 'JAP/SUB') return 2
+    return 9
+}
+
 function withTimeout(promise, timeoutMs, fallbackValue) {
     return Promise.race([
         promise,
@@ -443,6 +574,46 @@ function withTimeout(promise, timeoutMs, fallbackValue) {
             setTimeout(() => resolve(fallbackValue), timeoutMs)
         })
     ])
+}
+
+async function probePlayableStream(url, headers = {}) {
+    const key = `${url}|${JSON.stringify(headers || {})}`
+    const cached = streamProbeCache.get(key)
+    const now = Date.now()
+    if (cached && now - cached.at < 1000 * 60 * 5) return cached.ok
+
+    let ok = false
+    try {
+        const res = await http.get(url, {
+            timeout: 7000,
+            responseType: 'arraybuffer',
+            validateStatus: () => true,
+            headers: {
+                'User-Agent': STREAM_USER_AGENT,
+                Range: 'bytes=0-1',
+                ...headers
+            }
+        })
+
+        const ct = String(res.headers && res.headers['content-type'] ? res.headers['content-type'] : '').toLowerCase()
+        ok = ct.includes('video/') || ct.includes('application/vnd.apple.mpegurl') || ct.includes('application/x-mpegurl')
+    } catch {
+        ok = false
+    }
+
+    streamProbeCache.set(key, { at: now, ok })
+    return ok
+}
+
+async function filterPlayableStreams(streams) {
+    const out = []
+    for (const s of streams) {
+        if (!s || !s.url) continue
+        const headers = (s.behaviorHints && s.behaviorHints.proxyHeaders && s.behaviorHints.proxyHeaders.request) || {}
+        const ok = await probePlayableStream(s.url, headers)
+        if (ok) out.push(s)
+    }
+    return out
 }
 
 async function resolveProviderUrlToDirect(source, referer) {
@@ -480,6 +651,7 @@ async function resolveProviderUrlToDirect(source, referer) {
         })
 
         const found = new Set(extractDirectUrlsFromText(String(providerHtml)).filter(isLikelyDirectMediaUrl))
+        for (const u of extractMp4UploadDirectUrlsFromHtml(String(providerHtml))) found.add(u)
 
         const nestedIframes = extractIframeSrcUrls(providerHtml).slice(0, MAX_PROVIDER_IFRAMES)
         const iframeTasks = nestedIframes.map(async (iframeUrl) => {
@@ -507,40 +679,46 @@ async function resolveProviderUrlToDirect(source, referer) {
     return []
 }
 
-async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
+async function fetchEmbedSourcesFromEpisodePage(targetUrl, config = {}) {
+    const fastMode = Boolean(config.fastMode)
     const html = await fetchHtml(targetUrl)
     const $ = cheerio.load(html)
 
-    const fallbackStreams = []
-    const fallbackSeen = new Set()
-    for (const item of [...extractLinksFromTable($), ...extractIframeLinks($)]) {
-        const u = item.url || item.externalUrl
-        if (!u) continue
-        const k = directUrlDedupKey(u)
-        if (fallbackSeen.has(k)) continue
-        fallbackSeen.add(k)
-        fallbackStreams.push(item)
-    }
-
     const dtAjaxConfig = parseJsonVarFromHtml(html, 'dtAjax')
     const options = extractDooplayOptions($)
-    if (!dtAjaxConfig || !dtAjaxConfig.url_api || options.length === 0) return fallbackStreams
+    if (!dtAjaxConfig || !dtAjaxConfig.url_api || options.length === 0) return []
+
+    const workingOptions = fastMode ? options.slice(0, 4) : options
 
     const streams = []
     const seen = new Set()
 
-    function addStream(candidate, title, referer) {
+    function addStream(candidate, title, referer, languageTag = null, skipProxyWrap = false) {
+        if (!isLikelyTvPlayableUrl(candidate)) return
         const key = directUrlDedupKey(candidate)
         if (seen.has(key)) return
         seen.add(key)
+
+        const lang = normalizeLanguageTag(languageTag || extractLanguageFromTitle(title))
+        const displayTitle = `[${lang}] ${title}`
+
+        const stream = {
+            title: displayTitle,
+            url: skipProxyWrap ? candidate : buildProxyStreamUrl(candidate, referer),
+            behaviorHints: { notWebReady: false }
+        }
+
+        // Avoid forcing proxyHeaders by default on TV players; many direct URLs play better natively
+        if (referer && /streamtape\.com/i.test(candidate)) {
+            stream.behaviorHints = buildProxyHeadersBehaviorHints(referer)
+        }
+
         streams.push({
-            title,
-            url: candidate,
-            behaviorHints: referer ? buildProxyHeadersBehaviorHints(referer) : { notWebReady: false }
+            ...stream
         })
     }
 
-    for (const opt of options) {
+    for (const opt of workingOptions) {
         try {
             const endpoint = `${dtAjaxConfig.url_api}${opt.post}?type=${encodeURIComponent(opt.type)}&source=${encodeURIComponent(
                 opt.source
@@ -555,7 +733,7 @@ async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
 
             const directFromEmbedUrl = extractDirectUrlsFromText(embedUrl)
             for (const u of directFromEmbedUrl) {
-                addStream(u, `${opt.title} (${opt.server})`)
+                addStream(u, `${opt.server || 'SERVER'} • ${extractLanguageFromTitle(opt.title)}`)
             }
 
             if (directFromEmbedUrl.length > 0) continue
@@ -570,29 +748,44 @@ async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
                 (s) => !ONLY_CASTELLANO || s.language === 'CAST'
             )
 
-            const providerTasks = providerSources.map(async (providerSource) => {
-                const resolved = await withTimeout(
-                    resolveProviderUrlToDirect(providerSource, embedUrl),
-                    PROVIDER_REQUEST_TIMEOUT_MS,
-                    []
-                )
-                return resolved.map((r) => ({
-                    url: r,
-                    server: providerSource.server,
-                    language: providerSource.language,
-                    referer: providerSource.providerUrl
-                }))
-            })
-            const providerResults = await Promise.allSettled(providerTasks)
+            let providerResults = []
+            if (!fastMode) {
+                const providerTasks = providerSources.map(async (providerSource) => {
+                    const resolved = await withTimeout(
+                        resolveProviderUrlToDirect(providerSource, embedUrl),
+                        PROVIDER_REQUEST_TIMEOUT_MS,
+                        []
+                    )
+                    if (!resolved || resolved.length === 0) {
+                        return [
+                            {
+                                url: buildProviderProxyUrl(providerSource.providerUrl, embedUrl),
+                                server: providerSource.server,
+                                language: providerSource.language,
+                                referer: embedUrl
+                            }
+                        ]
+                    }
+                    return resolved.map((r) => ({
+                        url: r,
+                        server: providerSource.server,
+                        language: providerSource.language,
+                        referer: providerSource.providerUrl
+                    }))
+                })
+                providerResults = await Promise.allSettled(providerTasks)
+            }
 
             for (const u of [...directFromEmbedHtml, ...directFromStreamtape]) {
-                addStream(u, `${opt.title} (${opt.server})`, embedUrl)
+                addStream(u, `${opt.server || 'SERVER'} • ${extractLanguageFromTitle(opt.title)}`, embedUrl)
             }
 
             for (const r of providerResults) {
                 if (r.status !== 'fulfilled') continue
                 for (const item of r.value) {
-                    addStream(item.url, `${item.server} • ${item.language}`, item.referer || embedUrl)
+                    if (item.url) {
+                        addStream(item.url, `${item.server} • ${normalizeLanguageTag(item.language)}`, item.referer || embedUrl, item.language)
+                    }
                 }
             }
         } catch (err) {
@@ -600,8 +793,21 @@ async function fetchEmbedSourcesFromEpisodePage(targetUrl) {
         }
     }
 
-    if (streams.length > 0) return streams
-    return fallbackStreams
+    if (streams.length > 0) {
+        streams.sort((a, b) => {
+            const la = extractLanguageFromTitle(a.title)
+            const lb = extractLanguageFromTitle(b.title)
+            const ls = languageSortScore(la) - languageSortScore(lb)
+            if (ls !== 0) return ls
+
+            const pa = streamPriorityScore(a)
+            const pb = streamPriorityScore(b)
+            if (pa !== pb) return pa - pb
+            return String(a.title || '').localeCompare(String(b.title || ''))
+        })
+        return streams
+    }
+    return []
 }
 
 async function scrapeMeta(metaId, type) {
@@ -711,6 +917,7 @@ async function scrapeMeta(metaId, type) {
 
     if (videos.length > 0) {
         videos.sort((a, b) => (a.season - b.season) || (a.episode - b.episode))
+        prewarmStreamsForVideos(videos)
     } else {
         const id = `${metaId}:movie:${encodeURIComponent(pageUrl)}`
         videoUrlCache.set(id, pageUrl)
@@ -738,11 +945,83 @@ async function scrapeStreamsFromUrl(targetUrl) {
     const now = Date.now()
     if (cached && now - cached.at < STREAM_CACHE_TTL_MS) return cached.streams
 
-    const directStreams = await withTimeout(fetchEmbedSourcesFromEpisodePage(targetUrl), STREAM_RESOLVE_TIMEOUT_MS, [])
-    streamCache.set(targetUrl, { at: now, streams: directStreams })
-    if (directStreams.length > 0) return directStreams
+    const quickDiscovered = await withTimeout(fetchEmbedSourcesFromEpisodePage(targetUrl, { fastMode: true }), STREAM_FIRST_RESPONSE_TIMEOUT_MS, [])
+    const quickStreams = STRICT_PLAYABLE_ONLY
+        ? await withTimeout(filterPlayableStreams(quickDiscovered), 4000, [])
+        : quickDiscovered
+
+    if (quickStreams.length > 0) {
+        streamCache.set(targetUrl, { at: now, streams: quickStreams })
+    }
+
+    if (!streamResolveJobs.has(targetUrl)) {
+        streamResolveJobs.set(
+            targetUrl,
+            (async () => {
+                try {
+                    const discoveredStreams = await withTimeout(fetchEmbedSourcesFromEpisodePage(targetUrl), STREAM_RESOLVE_TIMEOUT_MS, [])
+                    const directStreams = await withTimeout(filterPlayableStreams(discoveredStreams), 12000, [])
+                    if (directStreams.length > 0) {
+                        streamCache.set(targetUrl, { at: Date.now(), streams: directStreams })
+                    } else if (discoveredStreams.length > 0) {
+                        streamCache.set(targetUrl, { at: Date.now(), streams: discoveredStreams })
+                    }
+                } finally {
+                    streamResolveJobs.delete(targetUrl)
+                }
+            })()
+        )
+    }
+
+    if (quickStreams.length > 0) return quickStreams
+
+    const runningJob = streamResolveJobs.get(targetUrl)
+    if (runningJob) {
+        await withTimeout(runningJob, 2500, null)
+        const afterWait = streamCache.get(targetUrl)
+        if (afterWait && Date.now() - afterWait.at < STREAM_CACHE_TTL_MS && afterWait.streams.length > 0) {
+            return afterWait.streams
+        }
+    }
+
+    const discoveredStreams = await withTimeout(fetchEmbedSourcesFromEpisodePage(targetUrl), 12000, [])
+    const fallbackStreams = STRICT_PLAYABLE_ONLY
+        ? await withTimeout(filterPlayableStreams(discoveredStreams), 8000, [])
+        : discoveredStreams
+
+    if (fallbackStreams.length > 0) {
+        streamCache.set(targetUrl, { at: Date.now(), streams: fallbackStreams })
+        return fallbackStreams
+    }
 
     return []
+}
+
+function prewarmStreamsForVideos(videos = []) {
+    for (const v of videos.slice(0, STREAM_PREWARM_VIDEOS)) {
+        const targetUrl = videoUrlCache.get(v.id)
+        if (!targetUrl) continue
+        if (streamResolveJobs.has(targetUrl)) continue
+
+        streamResolveJobs.set(
+            targetUrl,
+            (async () => {
+                try {
+                    const discoveredStreams = await withTimeout(fetchEmbedSourcesFromEpisodePage(targetUrl), STREAM_RESOLVE_TIMEOUT_MS, [])
+                    const directStreams = await withTimeout(filterPlayableStreams(discoveredStreams), 12000, [])
+                    if (directStreams.length > 0) {
+                        streamCache.set(targetUrl, { at: Date.now(), streams: directStreams })
+                    } else if (discoveredStreams.length > 0) {
+                        streamCache.set(targetUrl, { at: Date.now(), streams: discoveredStreams })
+                    }
+                } catch {
+                    // ignore prewarm errors
+                } finally {
+                    streamResolveJobs.delete(targetUrl)
+                }
+            })()
+        )
+    }
 }
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
@@ -803,3 +1082,79 @@ builder.defineStreamHandler(async ({ type, id }) => {
 const addonInterface = builder.getInterface()
 serveHTTP(addonInterface, { port: 7000 })
 console.log('AnimeOnline addon running on http://127.0.0.1:7000/manifest.json')
+
+nodeHttp.createServer(async (req, res) => {
+    try {
+        const reqUrl = new URL(req.url, `http://${req.headers.host || `127.0.0.1:${PROXY_PORT}`}`)
+        if (reqUrl.pathname !== '/proxy' && reqUrl.pathname !== '/provider') {
+            res.statusCode = 404
+            res.end('not found')
+            return
+        }
+
+        const referer = reqUrl.searchParams.get('referer') || ''
+        let target = reqUrl.searchParams.get('url') || ''
+        if (!/^https?:\/\//i.test(target)) {
+            res.statusCode = 400
+            res.end('bad url')
+            return
+        }
+
+        if (reqUrl.pathname === '/provider') {
+            const candidates = await withTimeout(
+                resolveProviderUrlToDirect({ providerUrl: target }, referer),
+                PROVIDER_REQUEST_TIMEOUT_MS,
+                []
+            )
+            target = (candidates || []).find((u) => isLikelyDirectMediaUrl(u) && isLikelyTvPlayableUrl(u)) || ''
+            if (!target) {
+                res.statusCode = 502
+                res.end('provider unresolved')
+                return
+            }
+        }
+
+        const headers = {
+            'User-Agent': STREAM_USER_AGENT,
+            Accept: '*/*'
+        }
+        if (referer) {
+            headers.Referer = referer
+            try { headers.Origin = new URL(referer).origin } catch { }
+        }
+        if (req.headers.range) headers.Range = req.headers.range
+
+        const upstream = await axios.get(target, {
+            responseType: 'stream',
+            timeout: 20000,
+            maxRedirects: 6,
+            validateStatus: () => true,
+            headers
+        })
+
+        const contentType = String(upstream.headers && upstream.headers['content-type'] ? upstream.headers['content-type'] : '').toLowerCase()
+        const playable = contentType.includes('video/')
+            || contentType.includes('application/vnd.apple.mpegurl')
+            || contentType.includes('application/x-mpegurl')
+        if (!playable) {
+            upstream.data.destroy()
+            res.statusCode = 502
+            res.end('unplayable upstream')
+            return
+        }
+
+        res.statusCode = upstream.status
+        const passHeaders = ['content-type', 'content-length', 'accept-ranges', 'content-range', 'cache-control']
+        for (const h of passHeaders) {
+            const v = upstream.headers[h]
+            if (v) res.setHeader(h, v)
+        }
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        upstream.data.pipe(res)
+    } catch {
+        res.statusCode = 502
+        res.end('proxy error')
+    }
+}).listen(PROXY_PORT, () => {
+    console.log(`Stream proxy running on http://${PUBLIC_HOST}:${PROXY_PORT}/proxy`)
+})
